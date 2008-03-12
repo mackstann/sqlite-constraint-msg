@@ -1,0 +1,34 @@
+Currently sqlite supports check constraints, but internally it just ANDs them
+together into a single expression.  Thus, it cannot keep track of which
+constraint failed.  These patches modify sqlite to keep track of the individual
+check constraints and their names, and then include them in error messages.
+
+Old behavior:
+
+    sqlite> insert into mytable (a) values
+       ...> ('some value that violates a check constraint named foo');
+    SQL error
+
+New behavior:
+
+    sqlite> insert into mytable (a) values
+       ...> ('some value that violates a check constraint named foo');
+    SQL error: constraint failed: foo
+
+If your check constraint is unnamed, then it gives you the expression:
+
+    sqlite> insert into mytable (a) values
+       ...> ('some value that violates an unnamed check constraint');
+    SQL error: constraint failed: a <> 'desired value'
+
+These additional constraint messages do make it up the chain into e.g. Python
+exceptions.
+
+Disclaimer: this code has not been tested to the high standard that the
+official sqlite code seems to be.  But it "werks fer me" and I've use the code
+for months on a website with moderate traffic.
+
+This document has been placed in the public domain.
+
+Nick Welch
+mack@incise.org

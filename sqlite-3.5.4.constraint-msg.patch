@@ -1,0 +1,230 @@
+# code changes authored by Nick Welch <mack@incise.org>.
+# The author or authors of this code dedicate any and all copyright interest in
+# this code to the public domain. We make this dedication for the benefit of
+# the public at large and to the detriment of our heirs and successors. We
+# intend this dedication to be an overt act of relinquishment in perpetuity of
+# all present and future rights to this code under copyright law.  
+diff -Nuar sqlite-3.5.4/src/build.c sqlite-mine/src/build.c
+--- sqlite-3.5.4/src/build.c	2007-12-04 08:54:53.000000000 -0800
++++ sqlite-mine/src/build.c	2008-01-17 20:31:21.000000000 -0800
+@@ -526,7 +526,19 @@
+   sqlite3_free(pTable->zColAff);
+   sqlite3SelectDelete(pTable->pSelect);
+ #ifndef SQLITE_OMIT_CHECK
+-  sqlite3ExprDelete(pTable->pCheck);
++  Check *pChk;
++  Check *pChkPrev = 0;
++  for(pChk=pTable->pCheck; pChk; pChk=pChk->pNext){
++    if(pChkPrev){
++      sqlite3_free(pChkPrev);
++    }
++    sqlite3ExprDelete(pChk->pExpr);
++    sqlite3_free(pChk->zName);
++    pChkPrev = pChk;
++  }
++  if(pChkPrev){
++    sqlite3_free(pChkPrev);
++  }
+ #endif
+   sqlite3VtabClear(pTable);
+   sqlite3_free(pTable);
+@@ -1163,6 +1175,7 @@
+ */
+ void sqlite3AddCheckConstraint(
+   Parse *pParse,    /* Parsing context */
++  Token *zName,
+   Expr *pCheckExpr  /* The check expression */
+ ){
+ #ifndef SQLITE_OMIT_CHECK
+@@ -1172,8 +1185,15 @@
+     /* The CHECK expression must be duplicated so that tokens refer
+     ** to malloced space and not the (ephemeral) text of the CREATE TABLE
+     ** statement */
+-    pTab->pCheck = sqlite3ExprAnd(db, pTab->pCheck, 
+-                                  sqlite3ExprDup(db, pCheckExpr));
++    Check * check = sqlite3_malloc( sizeof(Check) );
++    check->pNext = pTab->pCheck ? pTab->pCheck : 0;
++    check->pExpr = sqlite3ExprDup(db, pCheckExpr);
++    check->zName = zName
++        ? sqlite3DbStrNDup(db, zName->z, zName->n)
++        : sqlite3DbStrNDup(db, pCheckExpr->span.z, pCheckExpr->span.n);
++        /* or... */
++        /*: sqlite3DbStrNDup(db, "(unnamed check constraint)", strlen("(unnamed check constraint)"));*/
++    pTab->pCheck = check;
+   }
+ #endif
+   sqlite3ExprDelete(pCheckExpr);
+@@ -1408,7 +1428,8 @@
+ #ifndef SQLITE_OMIT_CHECK
+   /* Resolve names in all CHECK constraint expressions.
+   */
+-  if( p->pCheck ){
++  Check *pChk;
++  for(pChk=p->pCheck; pChk; pChk=pChk->pNext){
+     SrcList sSrc;                   /* Fake SrcList for pParse->pNewTable */
+     NameContext sNC;                /* Name context for pParse->pNewTable */
+ 
+@@ -1421,7 +1442,7 @@
+     sNC.pParse = pParse;
+     sNC.pSrcList = &sSrc;
+     sNC.isCheck = 1;
+-    if( sqlite3ExprResolveNames(&sNC, p->pCheck) ){
++    if( sqlite3ExprResolveNames(&sNC, pChk->pExpr) ){
+       return;
+     }
+   }
+diff -Nuar sqlite-3.5.4/src/insert.c sqlite-mine/src/insert.c
+--- sqlite-3.5.4/src/insert.c	2007-12-14 08:11:09.000000000 -0800
++++ sqlite-mine/src/insert.c	2008-01-17 20:31:21.000000000 -0800
+@@ -1042,21 +1042,28 @@
+   /* Test all CHECK constraints
+   */
+ #ifndef SQLITE_OMIT_CHECK
+-  if( pTab->pCheck && (pParse->db->flags & SQLITE_IgnoreChecks)==0 ){
+-    int allOk = sqlite3VdbeMakeLabel(v);
+-    assert( pParse->ckOffset==0 );
+-    pParse->ckOffset = nCol;
+-    sqlite3ExprIfTrue(pParse, pTab->pCheck, allOk, 1);
+-    assert( pParse->ckOffset==nCol );
+-    pParse->ckOffset = 0;
+-    onError = overrideError!=OE_Default ? overrideError : OE_Abort;
+-    if( onError==OE_Ignore ){
+-      sqlite3VdbeAddOp(v, OP_Pop, nCol+1+hasTwoRowids, 0);
+-      sqlite3VdbeAddOp(v, OP_Goto, 0, ignoreDest);
+-    }else{
+-      sqlite3VdbeAddOp(v, OP_Halt, SQLITE_CONSTRAINT, onError);
++  if( (pParse->db->flags & SQLITE_IgnoreChecks)==0 ){
++    Check *pChk;
++    for(pChk=pTab->pCheck; pChk; pChk=pChk->pNext){
++      int allOk = sqlite3VdbeMakeLabel(v);
++      assert( pParse->ckOffset==0 );
++      pParse->ckOffset = nCol;
++      sqlite3ExprIfTrue(pParse, pChk->pExpr, allOk, 1);
++      assert( pParse->ckOffset==nCol );
++      pParse->ckOffset = 0;
++      onError = overrideError!=OE_Default ? overrideError : OE_Abort;
++      if( onError==OE_Ignore ){
++        sqlite3VdbeAddOp(v, OP_Pop, nCol+1+hasTwoRowids, 0);
++        sqlite3VdbeAddOp(v, OP_Goto, 0, ignoreDest);
++      }else{
++        /*sqlite3VdbeOp3(v, OP_Halt, SQLITE_CONSTRAINT, onError, pChk->zName, 0);*/
++        char *zMsg = 0;
++        sqlite3VdbeAddOp(v, OP_Halt, SQLITE_CONSTRAINT, onError);
++        sqlite3SetString(&zMsg, "constraint failed: ", pChk->zName, (char*)0);
++        sqlite3VdbeChangeP3(v, -1, zMsg, P3_DYNAMIC);
++      }
++      sqlite3VdbeResolveLabel(v, allOk);
+     }
+-    sqlite3VdbeResolveLabel(v, allOk);
+   }
+ #endif /* !defined(SQLITE_OMIT_CHECK) */
+ 
+@@ -1526,8 +1533,14 @@
+     }
+   }
+ #ifndef SQLITE_OMIT_CHECK
+-  if( pDest->pCheck && !sqlite3ExprCompare(pSrc->pCheck, pDest->pCheck) ){
+-    return 0;   /* Tables have different CHECK constraints.  Ticket #2252 */
++  Check *pSrcChk;
++  Check *pDestChk;
++  for(pSrcChk=pSrc->pCheck; pSrcChk; pSrcChk=pSrcChk->pNext){
++    for(pDestChk=pDest->pCheck; pDestChk; pDestChk=pDestChk->pNext){
++      if( !sqlite3ExprCompare(pSrcChk->pExpr, pDestChk->pExpr) ){
++        return 0;   /* Tables have different CHECK constraints.  Ticket #2252 */
++      }
++    }
+   }
+ #endif
+ 
+diff -Nuar sqlite-3.5.4/src/parse.y sqlite-mine/src/parse.y
+--- sqlite-3.5.4/src/parse.y	2007-11-29 17:28:11.000000000 -0800
++++ sqlite-mine/src/parse.y	2008-01-17 20:33:22.000000000 -0800
+@@ -248,6 +248,7 @@
+ carglist ::= .
+ carg ::= CONSTRAINT nm ccons.
+ carg ::= ccons.
++carg ::= checkccons.
+ ccons ::= DEFAULT term(X).            {sqlite3AddDefaultValue(pParse,X);}
+ ccons ::= DEFAULT LP expr(X) RP.      {sqlite3AddDefaultValue(pParse,X);}
+ ccons ::= DEFAULT PLUS term(X).       {sqlite3AddDefaultValue(pParse,X);}
+@@ -268,7 +269,10 @@
+ ccons ::= PRIMARY KEY sortorder(Z) onconf(R) autoinc(I).
+                                      {sqlite3AddPrimaryKey(pParse,0,R,I,Z);}
+ ccons ::= UNIQUE onconf(R).    {sqlite3CreateIndex(pParse,0,0,0,0,R,0,0,0,0);}
+-ccons ::= CHECK LP expr(X) RP.       {sqlite3AddCheckConstraint(pParse,X);}
++
++checkccons ::= CONSTRAINT nm(N) CHECK LP expr(X) RP. {sqlite3AddCheckConstraint(pParse,&N,X);}
++checkccons ::= CHECK LP expr(X) RP.       {sqlite3AddCheckConstraint(pParse,0,X);}
++
+ ccons ::= REFERENCES nm(T) idxlist_opt(TA) refargs(R).
+                                 {sqlite3CreateForeignKey(pParse,0,&T,TA,R);}
+ ccons ::= defer_subclause(D).   {sqlite3DeferForeignKey(pParse,D);}
+@@ -312,18 +316,24 @@
+ conslist_opt(A) ::= COMMA(X) conslist.  {A = X;}
+ conslist ::= conslist COMMA tcons.
+ conslist ::= conslist tcons.
++conslist ::= conslist COMMA checktcons.
++conslist ::= conslist checktcons.
++conslist ::= CONSTRAINT nm tcons.
+ conslist ::= tcons.
+-tcons ::= CONSTRAINT nm.
++conslist ::= checktcons.
+ tcons ::= PRIMARY KEY LP idxlist(X) autoinc(I) RP onconf(R).
+                                          {sqlite3AddPrimaryKey(pParse,X,R,I,0);}
+ tcons ::= UNIQUE LP idxlist(X) RP onconf(R).
+                                  {sqlite3CreateIndex(pParse,0,0,0,X,R,0,0,0,0);}
+-tcons ::= CHECK LP expr(E) RP onconf. {sqlite3AddCheckConstraint(pParse,E);}
+ tcons ::= FOREIGN KEY LP idxlist(FA) RP
+           REFERENCES nm(T) idxlist_opt(TA) refargs(R) defer_subclause_opt(D). {
+     sqlite3CreateForeignKey(pParse, FA, &T, TA, R);
+     sqlite3DeferForeignKey(pParse, D);
+ }
++
++checktcons ::= CHECK LP expr(E) RP onconf. {sqlite3AddCheckConstraint(pParse,0,E);}
++checktcons ::= CONSTRAINT nm(N) CHECK LP expr(E) RP onconf. {sqlite3AddCheckConstraint(pParse,&N,E);}
++
+ %type defer_subclause_opt {int}
+ defer_subclause_opt(A) ::= .                    {A = 0;}
+ defer_subclause_opt(A) ::= defer_subclause(X).  {A = X;}
+diff -Nuar sqlite-3.5.4/src/sqliteInt.h sqlite-mine/src/sqliteInt.h
+--- sqlite-3.5.4/src/sqliteInt.h	2007-12-12 19:45:08.000000000 -0800
++++ sqlite-mine/src/sqliteInt.h	2008-01-17 20:31:21.000000000 -0800
+@@ -346,6 +346,7 @@
+ */
+ typedef struct AggInfo AggInfo;
+ typedef struct AuthContext AuthContext;
++typedef struct Check Check;
+ typedef struct CollSeq CollSeq;
+ typedef struct Column Column;
+ typedef struct Db Db;
+@@ -757,7 +758,7 @@
+   FKey *pFKey;       /* Linked list of all foreign keys in this table */
+   char *zColAff;     /* String defining the affinity of each column */
+ #ifndef SQLITE_OMIT_CHECK
+-  Expr *pCheck;      /* The AND of all CHECK constraints */
++  Check *pCheck;      /* List of CHECK constraints */
+ #endif
+ #ifndef SQLITE_OMIT_ALTERTABLE
+   int addColOffset;  /* Offset in CREATE TABLE statement to add a new column */
+@@ -778,6 +779,12 @@
+   Schema *pSchema;          /* Schema that contains this table */
+ };
+ 
++struct Check {
++  char *zName;
++  Expr *pExpr;
++  Check *pNext;
++};
++
+ /*
+ ** Test to see whether or not a table is a virtual table.  This is
+ ** done as a macro so that it will be optimized out when virtual
+@@ -1682,7 +1689,7 @@
+ void sqlite3AddColumn(Parse*,Token*);
+ void sqlite3AddNotNull(Parse*, int);
+ void sqlite3AddPrimaryKey(Parse*, ExprList*, int, int, int);
+-void sqlite3AddCheckConstraint(Parse*, Expr*);
++void sqlite3AddCheckConstraint(Parse*, Token*, Expr*);
+ void sqlite3AddColumnType(Parse*,Token*);
+ void sqlite3AddDefaultValue(Parse*,Expr*);
+ void sqlite3AddCollateType(Parse*, Token*);
