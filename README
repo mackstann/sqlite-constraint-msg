@@ -19,7 +19,7 @@ If your check constraint is unnamed, then it gives you the expression:
 
     sqlite> insert into mytable (a) values
        ...> ('some value that violates an unnamed check constraint');
-    SQL error: constraint failed: a <> 'desired value'
+    SQL error: constraint failed: a in (1, 2, 3)
 
 These additional constraint messages do make it up the chain into e.g. Python
 exceptions.
