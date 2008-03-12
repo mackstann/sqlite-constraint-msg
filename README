@@ -22,7 +22,8 @@ If your check constraint is unnamed, then it gives you the expression:
     SQL error: constraint failed: a in (1, 2, 3)
 
 These additional constraint messages do make it up the chain into e.g. Python
-exceptions.
+exceptions.  This allows you to keep your data integrity logic confined to the
+database and out of your application code.
 
 Disclaimer: this code has not been tested to the high standard that the
 official sqlite code seems to be.  But it "werks fer me" and I've used the code
