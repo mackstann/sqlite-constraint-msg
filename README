@@ -7,7 +7,7 @@ Old behavior:
 
     sqlite> insert into mytable (a) values
        ...> ('some value that violates a check constraint named foo');
-    SQL error
+    SQL error: constraint failed
 
 New behavior:
 
